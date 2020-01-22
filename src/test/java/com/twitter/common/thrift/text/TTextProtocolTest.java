@@ -28,7 +28,6 @@ import org.apache.thrift.TException;
 import org.apache.thrift.protocol.TProtocol;
 import org.apache.thrift.transport.TIOStreamTransport;
 import org.apache.thrift.transport.TTransport;
-import org.junit.Before;
 import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
@@ -42,7 +41,7 @@ import static org.junit.Assert.assertEquals;
 
 /**
  * Test the TTextProtocol
- *
+ * <p>
  * TODO(Alex Roetter): add more tests, especially ones that verify
  * that we generate ParseErrors for invalid input
  *
@@ -64,28 +63,21 @@ public class TTextProtocolTest {
   private Base64 base64Encoder;
 
   /**
-   * Load a file containing a serialized thrift message in from disk
+   * Read in (deserialize) a thrift message in TTextProtocol format
+   * from a file on disk, then serialize it back out to a string.
+   * Finally, deserialize that string and compare to the original
+   * message.
+   *
    * @throws IOException
    */
-  @Before
-  public void setUp() throws IOException {
+  @Test
+  public void tTextProtocolReadWriteTest() throws IOException, TException {
     fileContents = Resources.toString(Resources.getResource(
         getClass(),
         "/com/twitter/common/thrift/text/TTextProtocol_TestData.txt"),
         Charsets.UTF_8);
 
     base64Encoder = new Base64();
-  }
-
-  /**
-   * Read in (deserialize) a thrift message in TTextProtocol format
-   * from a file on disk, then serialize it back out to a string.
-   * Finally, deserialize that string and compare to the original
-   * message.
-   * @throws IOException
-   */
-  @Test
-  public void tTextProtocolReadWriteTest() throws IOException, TException {
     // Deserialize the file contents into a thrift message.
     ByteArrayInputStream bais1 = new ByteArrayInputStream(
         fileContents.getBytes());
@@ -127,7 +119,7 @@ public class TTextProtocolTest {
             3, 4L,
             5, 6L
         ))
-        .setJ(ImmutableMap.<Short,List<Boolean>>of(
+        .setJ(ImmutableMap.<Short, List<Boolean>>of(
             (short) 1, ImmutableList.<Boolean>of(true, true, false, true),
             (short) 5, ImmutableList.<Boolean>of(false)
         ))
@@ -138,7 +130,7 @@ public class TTextProtocolTest {
         .setP(Letter.CHARLIE)
         .setQ(EnumSet.allOf(Letter.class))
         .setR(ImmutableMap.<Sub, Long>of(sub(1, 2), 100L))
-        .setS(ImmutableMap.<Map<Map<Long, Long>, Long> ,Long>of(
+        .setS(ImmutableMap.<Map<Map<Long, Long>, Long>, Long>of(
             ImmutableMap.<Map<Long, Long>, Long>of(
                 ImmutableMap.<Long, Long>of(200L, 400L), 300L
             ), 100L
@@ -166,13 +158,62 @@ public class TTextProtocolTest {
     ByteArrayOutputStream baos = new ByteArrayOutputStream();
     msg.write(new TTextProtocol(new TIOStreamTransport(baos)));
 
-    String  expectedMsg =
+    String expectedMsg =
         "{\n" +
-        "  \"u\": {\n" +
-        "    \"f2\": 2\n" +
-        "  }\n" +
-        "}";
+            "  \"u\": {\n" +
+            "    \"f2\": 2\n" +
+            "  }\n" +
+            "}";
 
     assertEquals(expectedMsg, baos.toString());
+  }
+
+  @Test
+  public void tTextProtocolUnknowField() throws IOException, TException {
+    fileContents = Resources.toString(Resources.getResource(
+        getClass(),
+        "/com/twitter/common/thrift/text/TTextProtocol_TestData_UnknownField.txt"),
+        Charsets.UTF_8);
+
+    base64Encoder = new Base64();
+    // Deserialize the file contents into a thrift message.
+    ByteArrayInputStream bais1 = new ByteArrayInputStream(
+        fileContents.getBytes());
+
+    TTextProtocolTestMsg msg1 = new TTextProtocolTestMsg();
+    msg1.read(new TTextProtocol(new TIOStreamTransport(bais1)));
+
+    assertEquals(testMsg(), msg1);
+
+    // Serialize that thrift message out to a byte array
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    msg1.write(new TTextProtocol(new TIOStreamTransport(baos)));
+    byte[] bytes = baos.toByteArray();
+
+    // Deserialize that string back to a thrift message.
+    ByteArrayInputStream bais2 = new ByteArrayInputStream(bytes);
+    TTextProtocolTestMsg msg2 = new TTextProtocolTestMsg();
+    msg2.read(new TTextProtocol(new TIOStreamTransport(bais2)));
+
+    assertEquals(msg1, msg2);
+  }
+
+  @Test(expected = TException.class)
+  public void tTextProtocolUnknowFieldWithException() throws IOException, TException {
+    fileContents = Resources.toString(Resources.getResource(
+        getClass(),
+        "/com/twitter/common/thrift/text/TTextProtocol_TestData_UnknownField.txt"),
+        Charsets.UTF_8);
+
+    base64Encoder = new Base64();
+    // Deserialize the file contents into a thrift message.
+    ByteArrayInputStream bais1 = new ByteArrayInputStream(
+        fileContents.getBytes());
+
+    TTextProtocolTestMsg msg1 = new TTextProtocolTestMsg();
+
+    // Throw TException when there is a unknown field
+    msg1.read(new TTextProtocol(new TIOStreamTransport(bais1), false));
+
   }
 }

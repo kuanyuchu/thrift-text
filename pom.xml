@@ -6,7 +6,7 @@
 
     <groupId>com.twitter.common</groupId>
     <artifactId>thrift-text</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>1.0</version>
 
     <licenses>
         <license>

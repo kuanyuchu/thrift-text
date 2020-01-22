@@ -16,6 +16,17 @@
 
 package com.twitter.common.thrift.text;
 
+import com.google.common.base.Charsets;
+import com.google.common.io.ByteStreams;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonStreamParser;
+import com.google.gson.stream.JsonWriter;
+import org.apache.commons.codec.binary.Base64;
+import org.apache.thrift.TException;
+import org.apache.thrift.protocol.*;
+import org.apache.thrift.transport.TTransport;
+import org.apache.thrift.transport.TTransportException;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -24,59 +35,38 @@ import java.nio.ByteBuffer;
 import java.util.Stack;
 import java.util.logging.Logger;
 
-import com.google.common.base.Charsets;
-import com.google.common.io.ByteStreams;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonStreamParser;
-import com.google.gson.stream.JsonWriter;
-
-import org.apache.commons.codec.binary.Base64;
-import org.apache.thrift.TException;
-import org.apache.thrift.protocol.TField;
-import org.apache.thrift.protocol.TList;
-import org.apache.thrift.protocol.TMap;
-import org.apache.thrift.protocol.TMessage;
-import org.apache.thrift.protocol.TProtocol;
-import org.apache.thrift.protocol.TProtocolFactory;
-import org.apache.thrift.protocol.TSet;
-import org.apache.thrift.protocol.TStruct;
-import org.apache.thrift.protocol.TType;
-import org.apache.thrift.transport.TTransport;
-import org.apache.thrift.transport.TTransportException;
-
 /**
  * A simple text format for serializing/deserializing thrift
  * messages. This format is inefficient in space.
- *
+ * <p>
  * For an example, see:
  * tests/resources/com/twitter/common/thrift/text/TTextProtocol_TestData.txt
- *
+ * <p>
  * which is a text encoding of the thrift message defined in:
- *
+ * <p>
  * src/main/thrift/com/twitter/common/thrift/text/TTextProtocolTest.thrift
- *
+ * <p>
  * Whitespace (including newlines) is not significant.
- *
+ * <p>
  * No comments are allowed in the json.
- *
+ * <p>
  * We support parsing structs and anything embedded in a struct,
  * but not messages (which are generated as part of thrift RPC
  * service definitions).
- *
+ * <p>
  * TODO(Alex Roetter): write a wrapper that allows us to read in a file
  * of many structs (perhaps stored in a JsonArray), passing each struct to
  * this class for parsing.
- *
+ * <p>
  * See thrift's @see org.apache.thrift.protocol.TJSONProtocol
  * for another example an implementation of the @see TProtocol
  * interface. This class is based on that.
- *
+ * <p>
  * TODO(Alex Roetter): Also add a new TEXT_PROTOCOL field to ThriftCodec
- *
+ * <p>
  * TODO(Alex Roetter): throw this up on my github. Seems generally useful.
- *
+ * <p>
  * TODO(Alex Roetter): add support for enums
- *
  */
 public class TTextProtocol extends TProtocol {
   private static final Logger LOG = Logger.getLogger(
@@ -95,6 +85,9 @@ public class TTextProtocol extends TProtocol {
   private Base64 base64Encoder = new Base64();
   private final Stack<WriterByteArrayOutputStream> writers;
   private JsonStreamParser parser;
+
+  // Whether to sliently skip unknown fields
+  private boolean skipUnknownFields = true;
 
   private static class WriterByteArrayOutputStream {
     final JsonWriter writer;
@@ -118,9 +111,20 @@ public class TTextProtocol extends TProtocol {
 
   /**
    * Create a parser which can read from trans, and create the output writer
-   * that can write to a TTransport
+   * that can write to a TTransport.
+   * By default, it will skip unknown fields in the input and drop it
    */
   public TTextProtocol(TTransport trans) {
+    this(trans, true);
+  }
+
+  /**
+   * Create a parser which can read from trans, and create the output writer
+   * that can write to a TTransport
+   * Use the 2nd parameter, skipUnknownFields, to control if we want to
+   * throw exception when there is unknown fields in the input
+   */
+  public TTextProtocol(TTransport trans, boolean skipUnknownFields) {
     super(trans);
 
     writers = new Stack<WriterByteArrayOutputStream>();
@@ -138,6 +142,7 @@ public class TTextProtocol extends TProtocol {
     }
     contextStack = new Stack<BaseContext>();
     contextStack.push(new BaseContext());
+    this.skipUnknownFields = skipUnknownFields;
   }
 
   @Override
@@ -198,7 +203,6 @@ public class TTextProtocol extends TProtocol {
     writeJsonObjectBegin(new MapContext(null));
   }
 
-
   @Override
   public void writeMapEnd() throws TException {
     writeJsonObjectEnd();
@@ -224,6 +228,7 @@ public class TTextProtocol extends TProtocol {
   /**
    * Helper to write out the end of a Thrift type (either struct or map),
    * both of which are written as JsonObjects.
+   *
    * @throws TException
    */
   private void writeJsonObjectEnd() throws TException {
@@ -284,6 +289,7 @@ public class TTextProtocol extends TProtocol {
 
   /**
    * Helper shared by write{List/Set}End
+   *
    * @throws TException
    */
   private void writeSequenceEnd() throws TException {
@@ -294,7 +300,6 @@ public class TTextProtocol extends TProtocol {
     }
     popContext();
   }
-
 
   @Override
   public void writeBool(boolean b) throws TException {
@@ -418,8 +423,23 @@ public class TTextProtocol extends TProtocol {
       throw new RuntimeException("Expected String for a field name");
     }
 
-    return getCurrentContext().getTFieldByName(
-        jsonName.getAsJsonPrimitive().getAsString());
+    TField tField = new TField("",
+        TType.STRING, /* skip the field as string, then readBinary will be called */
+        (short) 0 /* Set id = 0 to skip the field */);
+    // There won't be any field with id 0.
+    // Even 0 is defined in the thrift, the thrift-generated java source will have index -1
+
+    try {
+      tField = getCurrentContext().getTFieldByName(
+          jsonName.getAsJsonPrimitive().getAsString());
+    } catch (TException e) {
+      if (skipUnknownFields) {
+        LOG.info(e.getMessage());
+      } else {
+        throw e;
+      }
+    }
+    return tField;
   }
 
   @Override
@@ -533,9 +553,18 @@ public class TTextProtocol extends TProtocol {
     return readNameOrValue(TypedParser.STRING);
   }
 
+  // Use readBinary as the function to skip the content of unknown field.
+  // Thus, for parse error we wrap it to return null because it might be expected.
   @Override
   public ByteBuffer readBinary() throws TException {
-    return ByteBuffer.wrap(base64Encoder.decode(readString()));
+    ByteBuffer ret = null;
+    try {
+      ret = ByteBuffer.wrap(base64Encoder.decode(readString()));
+    } catch (Exception e) {
+      LOG.info("Content can't be parsed as binary: " +
+          getCurrentContext().getCurrentChild().toString());
+    }
+    return ret;
   }
 
   /**
@@ -543,7 +572,7 @@ public class TTextProtocol extends TProtocol {
    * JSONElement is a string and we convert it), or as a value
    * (meaning the JSONElement has the type we expect).
    * Uses a TypedParser to do the real work.
-   *
+   * <p>
    * TODO(Alex Roetter): not sure TypedParser is a win for the number of
    * lines it saves. Consider expanding out all the readX() methods to
    * do what readNameOrValue does, calling the relevant methods from
@@ -560,7 +589,6 @@ public class TTextProtocol extends TProtocol {
       return ch.readFromJsonElement(elem);
     }
   }
-
 
   /**
    * Set up the stream parser to read from the trans_ TTransport
@@ -594,7 +622,6 @@ public class TTextProtocol extends TProtocol {
           }
         }), Charsets.UTF_8));
   }
-
 
   /**
    * Return the current parsing context
@@ -651,7 +678,8 @@ public class TTextProtocol extends TProtocol {
     writers.pop();
   }
 
-  /** Just a byte array output stream that forwards all data to
+  /**
+   * Just a byte array output stream that forwards all data to
    * a TTransport when it is flushed or closed
    */
   private class TTransportOutputStream extends ByteArrayOutputStream {
